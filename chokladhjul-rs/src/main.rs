@@ -69,7 +69,10 @@ struct Options {
     bench: bool,
 }
 
-const USAGE: &str = "Chokladhjul - tryck på mellanslag eller musknappen för att snurra.
+const USAGE: &str = concat!(
+    "Chokladhjul ",
+    env!("APP_VERSION"),
+    " - tryck på mellanslag eller musknappen för att snurra.
 
 Användning: chokladhjul [flaggor]
   --windowed      starta i fönster istället för helskärm
@@ -79,7 +82,8 @@ Användning: chokladhjul [flaggor]
   --capture <dir> spara skärmdumpar av en snurr som PNG och avsluta
   --bench         mät renderingstiden och avsluta
 
-Tangenter: Mellanslag/musknapp = snurra, F11/F = helskärm, Esc = lämna helskärm/avsluta";
+Tangenter: Mellanslag/musknapp = snurra, F11/F = helskärm, Esc = lämna helskärm/avsluta"
+);
 
 impl Options {
     fn parse() -> Self {
@@ -215,7 +219,7 @@ impl App {
     fn start(&mut self, event_loop: &ActiveEventLoop) -> Result<(), String> {
         let offscreen = self.opts.capture.is_some();
         let mut attrs = Window::default_attributes()
-            .with_title("Chokladhjul")
+            .with_title(concat!("Chokladhjul ", env!("APP_VERSION")))
             .with_inner_size(LogicalSize::new(1600.0, 900.0))
             .with_visible(!offscreen);
         if !self.opts.windowed && !offscreen && !self.opts.bench {

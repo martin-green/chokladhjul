@@ -1,0 +1,255 @@
+name: Chokladhjul (Rust)
+
+# Builds and tests chokladhjul-rs on every change. Pushing a tag like v1.2.3
+# also publishes a GitHub Release with Windows, Linux and macOS downloads.
+# Tags with a suffix (v1.2.3-beta.1) become pre-releases.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v[0-9]*']
+    # Path filters are ignored for tag pushes, so tags always build.
+    paths:
+      - 'chokladhjul-rs/**'
+      - '.github/workflows/chokladhjul-rs.yml'
+  pull_request:
+    paths:
+      - 'chokladhjul-rs/**'
+      - '.github/workflows/chokladhjul-rs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      release: ${{ steps.version.outputs.release }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - name: Read version from tag
+        id: version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          if [ "$REF_TYPE" = "tag" ]; then
+            if [[ ! "$REF_NAME" =~ ^v([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)$ ]]; then
+              echo "::error::Taggen ska se ut som v1.2.3 eller v1.2.3-beta.1, inte '$REF_NAME'."
+              exit 1
+            fi
+            version="${BASH_REMATCH[1]}"
+            release=true
+            if [[ "$version" == *-* ]]; then prerelease=true; else prerelease=false; fi
+          else
+            version="dev-${SHA:0:7}"
+            release=false
+            prerelease=false
+          fi
+          echo "Version $version (release: $release, prerelease: $prerelease)"
+          {
+            echo "version=$version"
+            echo "release=$release"
+            echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
+
+  windows:
+    name: Windows
+    needs: version
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      CHOKLADHJUL_VERSION: ${{ needs.version.outputs.version }}
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: chokladhjul-rs
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: chokladhjul-rs
+      - name: Test
+        run: cargo test --release --locked
+      - name: Build
+        run: cargo build --release --locked
+      - name: Package
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Compress-Archive -Path target/release/chokladhjul.exe `
+            -DestinationPath "dist/chokladhjul-$env:CHOKLADHJUL_VERSION-windows-x64.zip"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: chokladhjul-windows-x64
+          path: chokladhjul-rs/dist/*
+          if-no-files-found: error
+
+  linux:
+    name: Linux
+    needs: version
+    runs-on: ubuntu-latest
+    # Debian 12 (glibc 2.36) so the binary also runs on older distributions.
+    container: rust:1-bookworm
+    timeout-minutes: 30
+    env:
+      CHOKLADHJUL_VERSION: ${{ needs.version.outputs.version }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: chokladhjul-rs
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install ALSA headers
+        run: apt-get update && apt-get install -y --no-install-recommends libasound2-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: chokladhjul-rs
+      - name: Test
+        run: cargo test --release --locked
+      - name: Build
+        run: cargo build --release --locked
+      - name: Package
+        run: |
+          name="chokladhjul-$CHOKLADHJUL_VERSION-linux-x64"
+          mkdir -p "dist/$name"
+          cp target/release/chokladhjul "dist/$name/"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          rm -r "dist/${name:?}"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: chokladhjul-linux-x64
+          path: chokladhjul-rs/dist/*
+          if-no-files-found: error
+
+  macos:
+    name: macOS
+    needs: version
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      CHOKLADHJUL_VERSION: ${{ needs.version.outputs.version }}
+      MACOSX_DEPLOYMENT_TARGET: '11.0'
+    defaults:
+      run:
+        shell: bash
+        working-directory: chokladhjul-rs
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: chokladhjul-rs
+      - name: Test
+        run: cargo test --release --locked
+      - name: Build (Apple Silicon + Intel)
+        run: |
+          cargo build --release --locked --target aarch64-apple-darwin
+          cargo build --release --locked --target x86_64-apple-darwin
+      - name: Package app bundle
+        run: |
+          app=dist/Chokladhjul.app
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          lipo -create -output "$app/Contents/MacOS/chokladhjul" \
+            target/aarch64-apple-darwin/release/chokladhjul \
+            target/x86_64-apple-darwin/release/chokladhjul
+          lipo -info "$app/Contents/MacOS/chokladhjul"
+
+          if [[ "$CHOKLADHJUL_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            short_version="${BASH_REMATCH[0]}"
+          else
+            short_version="0.0.0"
+          fi
+          sed -e "s/@VERSION@/$CHOKLADHJUL_VERSION/" -e "s/@SHORT_VERSION@/$short_version/" \
+            packaging/macos/Info.plist > "$app/Contents/Info.plist"
+          plutil -lint "$app/Contents/Info.plist"
+
+          iconset="$RUNNER_TEMP/chokladhjul.iconset"
+          mkdir -p "$iconset"
+          for size in 16 32 128 256 512; do
+            sips -z "$size" "$size" assets/tynnered-logo-small.png --out "$iconset/icon_${size}x${size}.png" > /dev/null
+            sips -z "$((size * 2))" "$((size * 2))" assets/tynnered-logo-small.png \
+              --out "$iconset/icon_${size}x${size}@2x.png" > /dev/null
+          done
+          iconutil -c icns "$iconset" -o "$app/Contents/Resources/chokladhjul.icns"
+
+          # Ad-hoc signature: required on Apple Silicon, but not notarized.
+          codesign --force --sign - "$app"
+          codesign --verify --strict --verbose=2 "$app"
+
+          ditto -c -k --keepParent "$app" "dist/chokladhjul-$CHOKLADHJUL_VERSION-macos-universal.zip"
+          rm -r "$app"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: chokladhjul-macos-universal
+          path: chokladhjul-rs/dist/*
+          if-no-files-found: error
+
+  release:
+    name: GitHub Release
+    needs: [version, windows, linux, macos]
+    if: needs.version.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: chokladhjul-*
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: |
+          sha256sum -- * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.version.outputs.version }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "Releasen $TAG finns redan, ersätter filerna."
+            gh release upload "$TAG" dist/* --clobber
+            exit 0
+          fi
+
+          notes=$(cat <<'EOF'
+          ## Ladda ner
+
+          | System | Fil |
+          |--------|-----|
+          | Windows 10/11 (64-bit) | `chokladhjul-@VERSION@-windows-x64.zip` |
+          | macOS 11 eller senare (Apple Silicon och Intel) | `chokladhjul-@VERSION@-macos-universal.zip` |
+          | Linux (x64) | `chokladhjul-@VERSION@-linux-x64.tar.gz` |
+
+          Packa upp och starta `chokladhjul`. Mellanslag eller musknappen snurrar, Esc avslutar.
+
+          - **Windows:** SmartScreen kan varna eftersom programmet inte är signerat. Välj *Mer information* → *Kör ändå*.
+          - **macOS:** Appen är inte notariserad av Apple. Försök öppna den en gång, gå sedan till *Systeminställningar* → *Integritet och säkerhet* och klicka på *Öppna ändå*.
+          - **Linux:** Byggd på Debian 12. Kräver OpenGL 3.3 och ALSA (`libasound2`).
+          EOF
+          )
+          notes="${notes//@VERSION@/$VERSION}"
+
+          flags=(--title "Chokladhjul $VERSION" --notes "$notes" --generate-notes --verify-tag)
+          if [ "$PRERELEASE" = "true" ]; then
+            flags+=(--prerelease)
+          fi
+          gh release create "$TAG" dist/* "${flags[@]}"

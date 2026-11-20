@@ -50,6 +50,39 @@ cargo build --release
 
 Programmet hamnar i `target\release\chokladhjul.exe`. Tester: `cargo test --release`.
 
+## Släppa en ny version
+
+GitHub Actions ([.github/workflows/chokladhjul-rs.yml](../.github/workflows/chokladhjul-rs.yml))
+bygger och testar för Windows, Linux och macOS vid varje push till `main` och varje
+pull request som ändrar `chokladhjul-rs/`. Färdiga program finns som *artifacts* under
+körningen på fliken Actions.
+
+För att skapa en release pushar du en tagg:
+
+```
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+Då skapas en GitHub Release med:
+
+| Fil                                         | Innehåll                                        |
+|---------------------------------------------|-------------------------------------------------|
+| `chokladhjul-1.0.0-windows-x64.zip`         | `chokladhjul.exe`                               |
+| `chokladhjul-1.0.0-macos-universal.zip`     | `Chokladhjul.app` (Apple Silicon och Intel)     |
+| `chokladhjul-1.0.0-linux-x64.tar.gz`        | `chokladhjul` (byggd på Debian 12)              |
+| `SHA256SUMS.txt`                            | Kontrollsummor                                  |
+
+- Versionsnumret kommer från taggen och visas i fönstrets titel och i `--help`.
+  `Cargo.toml` behöver inte ändras. Lokala byggen heter `dev`.
+- Taggen måste se ut som `v1.2.3`. Taggar med tillägg, t.ex. `v1.2.3-beta.1`,
+  blir förhandsversioner (*pre-release*).
+- Release-texten får nedladdningsinstruktioner och en automatisk lista över ändringar
+  sedan förra releasen.
+- Kör workflowen igen för samma tagg så ersätts filerna i den befintliga releasen.
+- Programmen är inte signerade. Windows SmartScreen och macOS Gatekeeper varnar
+  första gången, och release-texten förklarar hur man startar ändå.
+
 ## Prestanda
 
 Målet är 60 fps på en i7-3610QM med GeForce GT 630M:
